@@ -161,20 +161,27 @@ $$STATE_DELAY      =1
 $$STATE_POLL       =2
 $$STATE_PROCESS_CMD=3
 $$STATE_PULSE_EN   =4
-  uint3 current_state = $STATE_INIT$;
+  uint3 current_state($STATE_INIT$);
 
   uint4 i(0);
   uint8 data_bus = uninitialized;
 
   uint24 inner_delay = uninitialized;
-  uint24 processing_delay = uninitialized;
+  uint19 processing_delay = uninitialized;
 
-  uint4 init(4b1100);
-  uint1 pulsing(1b0);
+  //! init = 3bABC
+  //!          ╻╻╻
+  //!          ||└╼ `1` if waiting for first stage pulses
+  //!          |└─╼ `1` if first init stage is not done
+  //!          └──╼ `1` if second init stage is not done
+  uint3 init(3b110);
+  //! processing = 2bAB
+  //!                ╻╻
+  //!                |└╼ only 4-bits mode: `1` if sending second part of command
+  //!                └─╼ `1` if waiting for command to be fully sent
   uint2 processing(2b00);
 
   lcd_rw := 0;
-  lcd_e  := pulsing;
 
   while (1) {
     switch (current_state) {
@@ -184,21 +191,17 @@ $$STATE_PULSE_EN   =4
         lcd_rs   = 0;
 
         switch (init) {
-          case 4b1100: {
-            init = 4b1101;
-
+          case 3b110: {
             init_sequence.addr = i;
             i = i + 1;
-            current_state = $STATE_INIT$;
-          }
-          case 4b1101: {
-            init = 4b1110;
+++:
+            init = 3b111;
 
             lcd_d = init_sequence.rdata[24, 8];
             current_state = $STATE_PULSE_EN$;
           }
-          case 4b1110: {
-            init = {1b1, i != $4 + LCD_4BITS$, 2b00};
+          case 3b111: {
+            init = {1b1, i != $4 + LCD_4BITS$, 1b0};
                      //       ^^^^^^^^^^^^^^^
                      // - 5 steps in 4-bits mode
                      // - 4 steps in 8-bits mode
@@ -206,22 +209,18 @@ $$STATE_PULSE_EN   =4
             inner_delay = init_sequence.rdata[0, 24];
             current_state = $STATE_DELAY$;
           }
-          case 4b1000: {
+          case 3b100: {
             // Second part of the initialization
-            init = 4b1001;
-
             init_sequence.addr = i;
             i = i + 1;
-            current_state = $STATE_INIT$;
-          }
-          case 4b1001: {
-            init = {i != $9 + LCD_4BITS$, 3b000};
+++:
+            init = {i != $9 + LCD_4BITS$, 2b00};
                     //   ^^^^^^^^^^^^^^^
                     // - 10 steps in 4-bits mode
                     // - 9 steps in 8-bits mode
 
             data_bus = init_sequence.rdata[24, 8];
-            processing_delay = init_sequence.rdata[0, 24];
+            processing_delay = init_sequence.rdata[0, 19];
             current_state = $STATE_PROCESS_CMD$;
           }
           default: {
@@ -231,20 +230,20 @@ $$STATE_PULSE_EN   =4
       }
       // Pulse the 'enable' pin
       case $STATE_PULSE_EN$: {
-        inner_delay = ~pulsing ? 45 : 3700;  // - enable pulse must be >450 ns
-                                             // - commands need >37 us to settle
-        pulsing = ~pulsing;
+        inner_delay = lcd_e ? 3700 : 45;   // - enable pulse must be >450 ns
+                                           // - commands need >37 us to settle
+        lcd_e = ~lcd_e;
         current_state = $STATE_DELAY$;
       }
       // Wait for `delay` to be 0, then return to either initialization or polling instructions.
       case $STATE_DELAY$: {
         if (inner_delay == 0) {
           // No more delay, continue
-          if (pulsing) {
+          if (lcd_e) {
             current_state = $STATE_PULSE_EN$;
           } else { if (processing) {
             current_state = $STATE_PROCESS_CMD$;
-          } else { if (init[3, 1]) {
+          } else { if (init[2, 1]) {
             current_state = $STATE_INIT$;
           } else {
             current_state = $STATE_POLL$;
@@ -276,7 +275,7 @@ $$if LCD_4BITS then
           case 2b11: {
             processing = 2b10;
             // Send second 4 bits part
-            lcd_d = {data_bus & 4b1111, 4b0000};
+            lcd_d = {data_bus, 4b0000};
 
             current_state = $STATE_PULSE_EN$;
           }
