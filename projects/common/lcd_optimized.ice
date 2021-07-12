@@ -24,18 +24,11 @@ group lcdio {
   uint1 clear_display  = 0,
   //! Moves the cursor to the home position (0, 0)
   uint1 return_home    = 0,
-  //! Enable or disable display:
-  //!   - if `data[0, 1] = 8b1` then enable
-  //!   - if `data[0, 1] = 8b0` then disable
+  //! Enable or disable display, cursor and blink:
+  //!   - `data[2, 1]` controls whether to enable display (HIGH) or not (LOW)
+  //!   - `data[1, 1]` controls whether to show the cursor (HIGH) or not (LOW)
+  //!   - `data[0, 1]` controls whether to blink the cursor (HIGH) or not (LOW)
   uint1 display_onoff  = 0,
-  //! Enable or disable showing the cursor:
-  //!   - if `data[0, 1] = 8b1` then enable
-  //!   - if `data[0, 1] = 8b0` then disable
-  uint1 cursor_onoff   = 0,
-  //! Enable or disable blinking the cursor:
-  //!   - if `data[0, 1] = 8b1` then enable
-  //!   - if `data[0, 1] = 8b0` then disable
-  uint1 blink_onoff    = 0,
   //! Shifts the entire display left or right:
   //!   - if `data[0, 1] = 1b1` shift left
   //!   - if `data[0, 1] = 1b0` shift right
@@ -58,8 +51,6 @@ $$function setup_lcdio(group_name)
 $$  return group_name .. ".clear_display := 0;\n" ..
 $$         group_name .. ".return_home   := 0;\n" ..
 $$         group_name .. ".display_onoff := 0;\n" ..
-$$         group_name .. ".cursor_onoff  := 0;\n" ..
-$$         group_name .. ".blink_onoff   := 0;\n" ..
 $$         group_name .. ".shift_display := 0;\n" ..
 $$         group_name .. ".print         := 0;\n" ..
 $$         group_name .. ".set_cursor    := 0;\n"
@@ -93,8 +84,6 @@ algorithm lcd_$__LCD_SIZE$_$LCD_2LINES+1$_$__LCD_PIXEL_RATIO$ (
     input  clear_display,
     input  return_home,
     input  display_onoff,
-    input  cursor_onoff,
-    input  blink_onoff,
     input  shift_display,
     input  print,
     input  set_cursor
@@ -153,9 +142,8 @@ $$INIT_B=nil
   //    └──────┘└────────────┘
   uint22 instruction = uninitialized;
 
-  uint6 command <: {io.clear_display, io.return_home, io.display_onoff ^ io.cursor_onoff ^ io.blink_onoff, io.shift_display, io.print, io.set_cursor};
+  uint6 command <: {io.clear_display, io.return_home, io.display_onoff, io.shift_display, io.print, io.set_cursor};
 
-  uint3 current_display_state(3b100);
 $$STATE_INIT       =0
 $$STATE_DELAY      =1
 $$STATE_POLL       =2
@@ -182,6 +170,7 @@ $$STATE_PULSE_EN   =4
   uint2 processing(2b00);
 
   lcd_rw := 0;
+  init_sequence.addr := i;
 
   while (1) {
     switch (current_state) {
@@ -192,7 +181,6 @@ $$STATE_PULSE_EN   =4
 
         switch (init) {
           case 3b110: {
-            init_sequence.addr = i;
             i = i + 1;
 ++:
             init = 3b111;
@@ -211,7 +199,6 @@ $$STATE_PULSE_EN   =4
           }
           case 3b100: {
             // Second part of the initialization
-            init_sequence.addr = i;
             i = i + 1;
 ++:
             init = {i != $9 + LCD_4BITS$, 2b00};
@@ -314,18 +301,10 @@ $$end
           }
           case 3: {
             // Display ON/OFF: RS, RW=0; D = 00001DCB; delay 37us
-            uint3 selector <: {io.display_onoff, io.cursor_onoff, io.blink_onoff};
-
             io.ready = 0;
 
-            onehot (selector) {
-              case 0: { data_bus = {5b00001, current_display_state[1, 2], io.data[0, 1]}; }
-              case 1: { data_bus = {5b00001, current_display_state[2, 1], io.data[0, 1], current_display_state[0, 1]}; }
-              case 2: { data_bus = {5b00001, io.data[0, 1], current_display_state[0, 2]}; }
-            }
-
-            current_display_state = data_bus[0, 3];
             lcd_rs = 0;
+            data_bus = {5b00001, io.data[0, 3]};
             processing_delay = 3700;
 
             current_state = $STATE_PROCESS_CMD$;
