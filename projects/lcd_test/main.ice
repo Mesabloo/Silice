@@ -7,7 +7,7 @@ $include('../common/lcd_optimized.ice')
 algorithm main(
   output uint$NUM_LEDS$ leds = 1,
 $$if PMOD then
-  output uint8          pmod,
+  inout  uint8          pmod,
 $$end
 ) {
   uint8 data = 0;
@@ -60,7 +60,8 @@ $$STATE_END         =6
   pmod2 := data[5, 1]; // D5
   pmod1 := data[4, 1]; // D4
 
-  pmod  := {pmod10,pmod9,pmod8,pmod7,pmod4,pmod3,pmod2,pmod1};
+  pmod.oenable := 8b11111111;
+  pmod.o       := {pmod10,pmod9,pmod8,pmod7,pmod4,pmod3,pmod2,pmod1};
 
   while (1) {
     switch (current_state) {
