@@ -352,6 +352,3 @@ $$STATE_POLL       =nil
 $$STATE_PROCESS_CMD=nil
 $$STATE_PULSE_EN   =nil
 }
-
-$$__LCD_SIZE       =nil
-$$__LCD_PIXEL_RATIO=nil

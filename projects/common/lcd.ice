@@ -292,6 +292,3 @@ $$end
     }
   }
 }
-
-$$__LCD_SIZE=nil
-$$__LCD_PIXEL_RATIO=nil
