@@ -350,12 +350,12 @@ void SiliceCompiler::run(
         // ask for reports
         m_Algorithms["main"]->enableReporting(fresult);
         // write top algorithm (recurses from there)
-        m_Algorithms["main"]->writeAsModule("",out);
+        m_Algorithms["main"]->writeAsModule(parser, "",out);
 
         for (auto const &[algname, alg] : m_Algorithms) {
           if (alg->isFormal()) {
             alg->enableReporting(fresult);
-            alg->writeAsModule("formal_" + algname + "$", out);
+            alg->writeAsModule(parser, "formal_" + algname + "$", out);
           }
         }
       }

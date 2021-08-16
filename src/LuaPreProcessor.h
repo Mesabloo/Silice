@@ -20,6 +20,7 @@ the distribution, please refer to it for details.
 
 #include <string>
 #include <unordered_set>
+#include <map>
 
 #include <LibSL/Math/Vertex.h>
 

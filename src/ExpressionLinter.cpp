@@ -32,12 +32,13 @@ LuaPreProcessor     *ExpressionLinter::s_LuaPreProcessor = nullptr;
 
 // -------------------------------------------------
 
-void ExpressionLinter::lint(
+t_type_nfo ExpressionLinter::lint(
   siliceParser::Expression_0Context              *expr,
   const Algorithm::t_combinational_block_context *bctx) const
 {
   t_type_nfo nfo;
   typeNfo(expr,bctx,nfo);
+  return nfo;
 }
 
 // -------------------------------------------------
@@ -271,6 +272,17 @@ void ExpressionLinter::checkAndApplyOperator(
   const t_type_nfo& nfo_b,
   t_type_nfo&      _nfo
 ) const {
+  // FIXME: Alright so this is a bit weird
+  //
+  // Let's say we have `a + b` where both the width of `a` and the width of `b` are unknown (e.g. `55 + 45`)
+  // The result of linting this expression yields a width of...0
+  //
+  // However, if we chain them, then we can literally generate whatever width we'd like,
+  // e.g. `1 + 2 + 3 + 4 + 5 + 6` is of width 4, whereas it should be of width -1 (unknown)
+  //
+  // More specifically, if both operand to `+` are of unknown width, then the result should be of unknown width as well
+  //
+  // This might affect other binary operators like `-`, `*` as well
   if (op == "+") {
     _nfo.base_type = base_type_of(nfo_a, nfo_b);
     _nfo.width     = max(nfo_a.width, nfo_b.width) + 1;

@@ -109,7 +109,7 @@ namespace Silice
     ExpressionLinter(const Algorithm *host, const Algorithm::t_instantiation_context& ictx) : m_Host(host), m_Ictx(ictx) { }
 
     /// \brief Lint an expression
-    void lint(
+    t_type_nfo lint(
       siliceParser::Expression_0Context              *expr, 
       const Algorithm::t_combinational_block_context *bctx) const;
 

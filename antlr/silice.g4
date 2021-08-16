@@ -58,6 +58,8 @@ TOSIGNED            : '__signed' ;
 
 TOUNSIGNED          : '__unsigned' ;
 
+DEBUG               : '__debug' ;
+
 DONE                : 'isdone' ;
 
 ALWAYS              : 'always' | 'always_before' ;
@@ -360,6 +362,8 @@ whileLoop           : 'while' '(' expression_0 ')' while_block=block ;
 
 display             : (DISPLAY | DISPLWRITE) '(' STRING ( ',' callParamList )? ')';
 
+debug               : DEBUG '(' STRING ( ',' callParamList )? ')' ;
+
 instruction         : assignment 
                     | syncExec
                     | asyncExec
@@ -369,6 +373,7 @@ instruction         : assignment
                     | returnFrom
                     | breakLoop
                     | display
+                    | debug
                     | assert_
                     | assume
                     | restrict

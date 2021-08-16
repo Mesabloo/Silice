@@ -27,6 +27,7 @@ holder must remain included in all distributions.
 #include "LuaPreProcessor.h"
 
 #include <cctype>
+#include <cmath>
 
 using namespace std;
 using namespace antlr4;
@@ -80,6 +81,188 @@ const std::vector<t_mem_member> c_SimpleDualPortBRAMmembers = {
   {true, false,"wdata1"},
   {true, true, "addr1"},
 };
+
+// -------------------------------------------------
+
+int Algorithm::s_debugCounter = 0;
+
+decltype(Algorithm::s_debugParams) Algorithm::s_debugParams{};
+
+
+namespace {
+  template <typename T>
+  struct identity { using type = T; };
+  template <typename T>
+  using identity_t = typename identity<T>::type;
+
+  template <class T, typename = std::enable_if<std::is_base_of_v<Algorithm::t_var_nfo, T>>>
+  static T var_factory(std::string const &name, t_type_nfo const &ty_nfo, std::initializer_list<std::string> vals = {}, bool startup_init = false) {
+    T _nfo;
+
+    _nfo.name = name;
+    _nfo.init_values = vals;
+    _nfo.table_size = 0;
+    _nfo.pipeline_prev_name = "";
+    _nfo.attribs = "";
+    _nfo.source_interval = antlr4::misc::Interval::INVALID;
+    _nfo.type_nfo = ty_nfo;
+    _nfo.do_not_initialize = vals.size() == 0;
+    _nfo.init_at_startup = startup_init;
+
+    return _nfo;
+  }
+
+  template <template <class, class> class C, class K, class V>
+  V get_or_default(C<K, V> const &map, identity_t<K> const &&key, identity_t<V> &&def) {
+    // NOTE: putting `K` and `V` inside an identity structure makes it so that they are deduced only from
+    // the map type `C`, allowing string literal to be constructed as `std::string` instead of being of an ambiguous type.
+    auto it = std::find_if(std::cbegin(map), std::cend(map), [&key] (auto const &tup) { return std::get<0>(tup) == key; });
+    return it == std::end(map) ? def : it->second;
+  }
+}
+
+AutoPtr<Algorithm> Algorithm::debug_algorithm(antlr4::Parser &parser, decltype(Algorithm::s_debugParams) const &allDebugParams) const {
+  static AutoPtr<Algorithm> algorithm = AutoPtr<Algorithm>(nullptr);
+
+  if (algorithm.isNull()) {
+    auto main_algorithm_it = m_KnownAlgorithms.find("main");
+    if (main_algorithm_it == m_KnownAlgorithms.end()) {
+      reportError(antlr4::misc::Interval::INVALID, -1, "cannot create debugger instance because no 'main' algorithm has been found");
+    }
+    auto main_alg = main_algorithm_it->second;
+
+    auto const &config = CONFIG.keyValues();
+
+    std::string debug_lcd_e, debug_lcd_rs, debug_lcd_d, debug_lcd_d_width, debug_use_lcd, debug_sample_freq, debug_switch;
+
+    debug_use_lcd = ::get_or_default(config, "debug_use_lcd", "0");
+    debug_lcd_e = ::get_or_default(config, "debug_lcd_e", "");
+    debug_lcd_rs = ::get_or_default(config, "debug_lcd_rs", "");
+    debug_lcd_d = ::get_or_default(config, "debug_lcd_d", "");
+    debug_sample_freq = ::get_or_default(config, "debug_sample_freq", "2000");
+    debug_switch = ::get_or_default(config, "debug_switch", "");
+    debug_lcd_d_width = ::get_or_default(config, "debug_lcd_d_width", "0");
+
+    Algorithm *alg = new Algorithm("__debug", false, m_Clock, m_Reset, true, false, "30", "120", {}, m_KnownModules, m_KnownAlgorithms, m_KnownSubroutines, m_KnownCircuitries, m_KnownGroups, m_KnownInterfaces, m_KnownBitFields);
+
+    if (debug_use_lcd == "1") {
+      // 0. check configuration
+      if (debug_lcd_e.empty())
+        reportError(antlr4::misc::Interval::INVALID, -1, "config field 'debug_lcd_e' must be set to a variable name");
+      if (debug_lcd_rs.empty())
+        reportError(antlr4::misc::Interval::INVALID, -1, "config field 'debug_lcd_rs' must be set to a variable name");
+      if (debug_lcd_d.empty())
+        reportError(antlr4::misc::Interval::INVALID, -1, "config field 'debug_lcd_d' must be set to a variable name");
+      if (debug_switch.empty())
+        reportError(antlr4::misc::Interval::INVALID, -1, "config field 'debug_switch' must be set to a variable name");
+
+      // 1. generate all inputs & outputs for the `__debug` algorithm
+      for (std::string const s : { "lcd_e", "lcd_rs" }) {
+        auto out_nfo = var_factory<t_output_nfo>(s, t_type_nfo(e_Type::UInt, 1));
+
+        size_t i = alg->m_Outputs.size();
+        alg->m_Outputs.push_back(out_nfo);
+
+        alg->m_OutputNames.insert_or_assign(s, i);
+      }
+      {
+        auto data_var_it = main_alg->m_VarNames.find(debug_lcd_d);
+        auto data_out_it = main_alg->m_OutputNames.find(debug_lcd_d);
+        if (data_var_it == main_alg->m_VarNames.end() && data_out_it == main_alg->m_OutputNames.end()) {
+          reportError(antlr4::misc::Interval::INVALID, -1, ("'" + debug_lcd_d + "' is not a variable or an output of the 'main' algorithm").c_str());
+        }
+        int debug_lcd_d_width_ = 0;
+        if (data_out_it == main_alg->m_OutputNames.end()) debug_lcd_d_width_ = main_alg->m_Vars[data_var_it->second].type_nfo.width;
+        else                                              debug_lcd_d_width_ = main_alg->m_Outputs[data_out_it->second].type_nfo.width;
+
+        if (debug_lcd_d_width_ != 4 && debug_lcd_d_width_ != 8) {
+          reportError(antlr4::misc::Interval::INVALID, -1, ("width of '" + debug_lcd_d + "' is %d in the 'main' algorithm, but must be either 4 or 8 to work with the LCD driver").c_str(), debug_lcd_d_width_);
+        }
+        if (std::stoi(debug_lcd_d_width) != debug_lcd_d_width_) {
+          reportError(antlr4::misc::Interval::INVALID, -1, ("width of '" + debug_lcd_d + "' in the 'main' algorithm is different from value of config variable 'debug_lcd_d_width' (%d != %s)").c_str(), debug_lcd_d_width_, debug_lcd_d_width.c_str());
+        }
+
+        auto in_nfo = var_factory<t_output_nfo>("lcd_d", t_type_nfo(e_Type::UInt, debug_lcd_d_width_));
+
+        size_t i = alg->m_Outputs.size();
+        alg->m_Outputs.push_back(in_nfo);
+        alg->m_OutputNames.insert_or_assign("lcd_d", i);
+      }
+      {
+        auto in_nfo = var_factory<t_inout_nfo>("switch", t_type_nfo(e_Type::UInt, 1));
+
+        size_t i = alg->m_Inputs.size();
+        alg->m_Inputs.push_back(in_nfo);
+        alg->m_InputNames.insert_or_assign("switch", i);
+      }
+      // forall debug param group, generate a new input
+      auto t_type_nfo_width_sum = [](int const i, t_type_nfo const ty) { return i + ty.width; };
+
+      std::clog << "[LOG] Number of `__debug`: " << allDebugParams.size() << nxl;
+
+      for (auto const &[dbg_ctx, nfo] : allDebugParams) {
+        auto const &[i, ty_nfos] = nfo;
+
+        std::string name = "data_" + std::to_string(i);
+
+        size_t bus_width = std::accumulate(std::begin(ty_nfos), std::end(ty_nfos), 0, t_type_nfo_width_sum);
+
+        std::clog << "[LOG] " << name << " <: uint" << bus_width << nxl;
+
+        if (bus_width > 0) {
+          auto in_nfo = var_factory<t_inout_nfo>(name, t_type_nfo(e_Type::UInt, bus_width));
+
+          size_t j = alg->m_Inputs.size();
+          alg->m_Inputs.push_back(in_nfo);
+          alg->m_InputNames.insert_or_assign(name, j);
+        }
+      }
+    }
+
+    // gather elements from source code
+    t_combinational_block *main = alg->addBlock("_top", nullptr);
+    main->is_state = true;
+
+    /*
+    // context
+    t_gather_context context;
+    context.__id = -1;
+    context.break_to = nullptr;
+    */
+
+    if (!allDebugParams.empty()) {
+      // 2. create all local variables
+      {
+        std::size_t j;
+        t_var_nfo local_nfo;
+
+        j = alg->m_Vars.size();
+        local_nfo = var_factory<t_var_nfo>("state", t_type_nfo(e_Type::UInt, allDebugParams.size()), {"1"}, true);
+        alg->m_Vars.push_back(local_nfo);
+        alg->m_VarNames.insert_or_assign("state", j);
+
+        j = alg->m_Vars.size();
+        local_nfo = var_factory<t_var_nfo>("sample_cnt", t_type_nfo(e_Type::UInt, lround(log2f(std::stoi(debug_sample_freq)) + 1)), {"0"}, true);
+        alg->m_Vars.push_back(local_nfo);
+        alg->m_VarNames.insert_or_assign("sample_cnt", j);
+
+        j = alg->m_Vars.size();
+        local_nfo = var_factory<t_var_nfo>("switch_cnt", t_type_nfo(e_Type::UInt, 4), {"0"}, true);
+        alg->m_Vars.push_back(local_nfo);
+        alg->m_VarNames.insert_or_assign("switch_cnt", j);
+
+        j = alg->m_Vars.size();
+      }
+    }
+
+
+
+    algorithm = AutoPtr<Algorithm>(std::move(alg));
+  }
+
+  return algorithm;
+}
+
 
 // -------------------------------------------------
 
@@ -1999,6 +2182,18 @@ void Algorithm::gatherStableinputCheck(siliceParser::StableinputContext *ctx, t_
 
 //-------------------------------------------------
 
+void Algorithm::gatherDebug(siliceParser::DebugContext *ctx, t_combinational_block *_current, t_gather_context *_context)
+{
+  if (m_Name != "main") {
+    reportError(ctx->getSourceInterval(), (int)ctx->getStart()->getLine(), "use of '__debug' is unsupported outside 'main'");
+  }
+
+  m_generatesDebugging = true;
+  _current->instructions.emplace_back(ctx, _current, _context->__id);
+}
+
+//-------------------------------------------------
+
 int Algorithm::gatherDeclarationList(siliceParser::DeclarationListContext* decllist, t_combinational_block *_current, t_gather_context* _context,bool var_group_table_only)
 {
   if (decllist == nullptr) {
@@ -3344,6 +3539,7 @@ Algorithm::t_combinational_block *Algorithm::gather(
   auto jump         = dynamic_cast<siliceParser::JumpContext*>(tree);
   auto assign       = dynamic_cast<siliceParser::AssignmentContext*>(tree);
   auto display      = dynamic_cast<siliceParser::DisplayContext *>(tree);
+  auto debug        = dynamic_cast<siliceParser::DebugContext *>(tree);
   auto async        = dynamic_cast<siliceParser::AsyncExecContext*>(tree);
   auto join         = dynamic_cast<siliceParser::JoinExecContext*>(tree);
   auto sync         = dynamic_cast<siliceParser::SyncExecContext*>(tree);
@@ -3423,6 +3619,7 @@ Algorithm::t_combinational_block *Algorithm::gather(
   } else if (async)        { _current->instructions.push_back(t_instr_nfo(async, _current, _context->__id));    recurse = false;
   } else if (assign)       { _current->instructions.push_back(t_instr_nfo(assign, _current, _context->__id));   recurse = false;
   } else if (display)      { _current->instructions.push_back(t_instr_nfo(display, _current, _context->__id));  recurse = false;
+  } else if (debug)        { gatherDebug(debug, _current, _context);                       recurse = false;
   } else if (assert_)      { _current->instructions.push_back(t_instr_nfo(assert_, _current, _context->__id));  recurse = false;
   } else if (assume)       { _current->instructions.push_back(t_instr_nfo(assume, _current, _context->__id));   recurse = false;
   } else if (restrict)     { _current->instructions.push_back(t_instr_nfo(restrict, _current, _context->__id)); recurse = false;
@@ -5099,6 +5296,7 @@ void Algorithm::checkExpressions(const t_instantiation_context &ictx,antlr4::tre
   auto async  = dynamic_cast<siliceParser::AsyncExecContext *>(node);
   auto sync   = dynamic_cast<siliceParser::SyncExecContext *>(node);
   auto join   = dynamic_cast<siliceParser::JoinExecContext *>(node);
+  auto debug  = dynamic_cast<siliceParser::DebugContext *>(node);
   if (expr) {
     ExpressionLinter linter(this,ictx);
     linter.lint(expr, &_current->context);
@@ -5194,6 +5392,24 @@ void Algorithm::checkExpressions(const t_instantiation_context &ictx,antlr4::tre
         }
       }
     }
+  } else if (debug) {
+    ExpressionLinter linter(this, ictx);
+
+    std::vector<t_type_nfo> types{};
+
+    if (auto params = debug->callParamList()) {
+      for (auto param : params->expression_0()) {
+        t_type_nfo expr_ty = linter.lint(param, &_current->context);
+
+        if (expr_ty.width <= 0) {
+          reportError(param->getSourceInterval(), (int)param->getStart()->getLine(), "'__debug' parameter has unknown or null width");
+        }
+
+        types.push_back(expr_ty);
+      }
+    }
+
+    s_debugParams.insert_or_assign(debug, std::make_pair(s_debugCounter++, types));
   } else {
     for (auto c : node->children) {
       checkExpressions(ictx, c, _current);
@@ -7388,7 +7604,7 @@ void Algorithm::writeModuleMemory(std::string instance_name, std::ostream& out, 
 
 // -------------------------------------------------
 
-void Algorithm::writeAsModule(std::string instance_name, std::ostream &out)
+void Algorithm::writeAsModule(antlr4::Parser &parser, std::string instance_name, std::ostream &out)
 {
   t_instantiation_context ictx; // empty instantiation context
   ictx.instance_name = instance_name;
@@ -7399,22 +7615,27 @@ void Algorithm::writeAsModule(std::string instance_name, std::ostream &out)
     std::ofstream freport_v(vioReportName());
     std::ofstream freport_f(fsmReportName());
   }
-  writeAsModule(out, ictx, true);
-  writeAsModule(out, ictx, false);
+  writeAsModule(parser, out, ictx, true);
+  writeAsModule(parser, out, ictx, false);
 }
 
 // -------------------------------------------------
 
-void Algorithm::writeAsModule(std::ostream &out, const t_instantiation_context &ictx, bool first_pass)
+void Algorithm::writeAsModule(antlr4::Parser &parser, std::ostream &out, const t_instantiation_context &ictx, bool first_pass)
 {
   if (first_pass) {
 
     /// first pass
 
-    // optimize
-    optimize();
     // lint upon instantiation
     lint(ictx);
+
+    if (ictx.instance_name == "") {
+      rewriteASTIfDebug(parser);
+    }
+
+    // optimize
+    optimize();
 
     // activate reporting?
     m_ReportingEnabled = (!m_ReportBaseName.empty());
@@ -7444,7 +7665,7 @@ void Algorithm::writeAsModule(std::ostream &out, const t_instantiation_context &
     {
       t_vio_ff_usage ff_usage;
       std::ofstream null;
-      writeAsModule(null, ictx, ff_usage, first_pass);
+      writeAsModule(parser, null, ictx, ff_usage, first_pass);
 
       // update usage based on first pass
       for (const auto &v : ff_usage.ff_usage) {
@@ -7503,7 +7724,7 @@ void Algorithm::writeAsModule(std::ostream &out, const t_instantiation_context &
     m_ReportingEnabled = false;
 
     t_vio_ff_usage ff_usage;
-    writeAsModule(out, ictx, ff_usage, first_pass);
+    writeAsModule(parser, out, ictx, ff_usage, first_pass);
 
     // output VIO report (if enabled)
     if (!m_ReportBaseName.empty()) {
@@ -7540,7 +7761,7 @@ bool Algorithm::getVIONfo(std::string vio, t_var_nfo& _nfo) const
 
 // -------------------------------------------------
 
-void Algorithm::writeAsModule(ostream& out, const t_instantiation_context& ictx, t_vio_ff_usage& _ff_usage, bool first_pass) const
+void Algorithm::writeAsModule(antlr4::Parser &parser, ostream& out, const t_instantiation_context& ictx, t_vio_ff_usage& _ff_usage, bool first_pass) const
 {
   out << nxl;
 
@@ -7585,7 +7806,7 @@ void Algorithm::writeAsModule(ostream& out, const t_instantiation_context& ictx,
     // -> write instance
     local_ictx.instance_name = ictx.instance_name + "_" + nfo.instance_name;
     local_ictx.local_instance_name = nfo.instance_name;
-    nfo.algo->writeAsModule(out, local_ictx, first_pass);
+    nfo.algo->writeAsModule(parser, out, local_ictx, first_pass);
   }
 
   // module header
@@ -8184,3 +8405,69 @@ void Algorithm::enableReporting(std::string reportname)
 }
 
 // -------------------------------------------------
+
+void Algorithm::rewriteASTIfDebug(antlr4::Parser &parser)
+{
+  if (!m_generatesDebugging)
+    return;
+
+  AutoPtr<Algorithm> alg__debug = debug_algorithm(parser, s_debugParams);
+
+  if (m_Name == "main") {
+    // NOTE: if it is the main algorithm, we also have to instantiate the debug algorithm
+
+    auto const &cfg = CONFIG.keyValues();
+
+    std::vector<t_binding_nfo> bindings{};
+    if (::get_or_default(cfg, "debug_use_lcd", "0") == "1") {
+      std::string lcd_e, lcd_rs, lcd_d, switch_;
+      lcd_e = ::get_or_default(cfg, "debug_lcd_e", "");
+      lcd_rs = ::get_or_default(cfg, "debug_lcd_rs", "");
+      lcd_d = ::get_or_default(cfg, "debug_lcd_d", "");
+      switch_ = ::get_or_default(cfg, "debug_switch", "");
+
+      std::initializer_list<std::pair<std::string, std::string>> outputBindings =
+        { {"lcd_e", lcd_e},
+          {"lcd_rs", lcd_rs},
+          {"lcd_d", lcd_d} };
+
+      // bind ports relative to the LCD driver
+      for (auto const &[left, right] : outputBindings) {
+        bindings.push_back((t_binding_nfo) {
+          .left = left,
+          .right = right,
+          .dir = e_BindingDir::e_Right,
+          .line = -1,
+        });
+
+        // NOTE: we have to adapt the binding usages of the variables in the `main` algorithm
+//        m_Vars[m_VarNames[right]].usage = e_VarUsage::e_Bound;
+//        m_VIOBoundToModAlgOutputs.insert_or_assign(right, left);
+      }
+
+      bindings.push_back((t_binding_nfo) {
+        .left = "switch",
+        .right = switch_,
+        .dir = e_BindingDir::e_Left,
+        .line = -1,
+      });
+//      m_Vars[m_VarNames[switch_]].usage = e_VarUsage::e_Wire;
+    }
+
+    t_algo_nfo debug_instance = {
+    .algo_name = "__debug",
+    .instance_name = "__debug",
+    .instance_clock = m_Clock,
+    .instance_reset = m_Reset,
+    .instance_prefix = "___debug",
+    .instance_line = -1,
+    .algo = alg__debug,
+    .bindings = bindings,
+    .autobind = false,
+    .boundinputs = {},
+    };
+
+    m_InstancedAlgorithms.insert_or_assign("__debug", debug_instance);
+    m_InstancedAlgorithmsInDeclOrder.push_back("__debug");
+  }
+}

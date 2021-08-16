@@ -64,13 +64,13 @@
     (,(rx-to-string '(: bow (| "@" "!") (| alpha "_") (* (| alnum "_")) eow))
      . font-lock-function-name-face)
     ;; algorithm meta-specifiers
-    (,(rx-to-string '(: bow (| "__" "$") (| "display" "write" "unsigned" "signed" "widthof" "sameas") eow))
+    (,(rx-to-string '(: bow (| "__display" "__write" "__unsigned" "__signed" "widthof" "sameas" "__debug") eow))
      . font-lock-builtin-face)
     ;; intrinsics
     (,(rx-to-string '(: bow (? "u") "int" (* digit) eow))
      . font-lock-type-face)
     ;; builtin types
-    (,(rx-to-string '(: (+ digit) (| "b" "B" "h" "H" "d" "D") (+ xdigit) eow))
+    (,(rx-to-string '(: (+ digit) (| "b" "B" "h" "H" "d" "D") (+ (| "x" "z" xdigit)) eow))
      . font-lock-constant-face)
     (,(rx-to-string '(: bow (+ digit) eow))
      . font-lock-constant-face)

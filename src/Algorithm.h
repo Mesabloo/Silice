@@ -141,6 +141,14 @@ namespace Silice
     /// \brief all the modes the algorithm is supposed to be verified in
     std::vector<std::string> m_FormalModes{};
 
+    /// \brief records whether the algorithm has `__debug` statements in its body
+    bool m_generatesDebugging = false;
+    /// \brief stores information for all `__debug` statements: its unique number and types for all its arguments
+    static std::map<siliceParser::DebugContext *, std::pair<int, std::vector<t_type_nfo>>> s_debugParams;
+
+    /// \brief holds the number of `__debug` statements in the whole program
+    static int s_debugCounter;
+
     /// \brief Set of known modules
     const std::unordered_map<std::string, AutoPtr<Module> >& m_KnownModules;
     /// \brief Set of known algorithms
@@ -793,6 +801,8 @@ private:
     void gatherStableCheck(siliceParser::AssumestableContext *chk, t_combinational_block *_current, t_gather_context *_context);
     /// \brief gather stableinput checks
     void gatherStableinputCheck(siliceParser::StableinputContext *ctx, t_combinational_block *_current, t_gather_context *_context);
+    /// \brief gather `__debug` statement
+    void gatherDebug(siliceParser::DebugContext *ctx, t_combinational_block *_current, t_gather_context *_context);
     /// \brief expands the name of a subroutine vio
     std::string subroutineVIOName(std::string vio, const t_subroutine_nfo *sub);
     /// \brief expands the name of a block vio
@@ -1018,6 +1028,8 @@ private:
     /// \brief returns the line range of an instruction
     v2i instructionLines(antlr4::tree::ParseTree *instr, const t_instantiation_context &ictx) const;
 
+
+    AutoPtr<Algorithm> debug_algorithm(antlr4::Parser &parser, decltype(Algorithm::s_debugParams) const &allDebugParams) const;
   public:
 
     /// \brief constructor
@@ -1176,11 +1188,14 @@ private:
     /// \brief prepare replacements for a memory module template
     void prepareModuleMemoryTemplateReplacements(std::string instance_name, const t_mem_nfo& bram, std::unordered_map<std::string, std::string>& _replacements) const;
     /// \brief writes the algorithm as a Verilog module, recurses through instanced algorithms
-    void writeAsModule(std::ostream &out, const t_instantiation_context &ictx, bool first_pass);
+    void writeAsModule(antlr4::Parser &parser, std::ostream &out, const t_instantiation_context &ictx, bool first_pass);
     /// \brief writes the algorithm as a Verilog module, calls the version above twice in a two pass optimization process
-    void writeAsModule(std::ostream &out, const t_instantiation_context& ictx, t_vio_ff_usage &_ff_usage, bool do_lint) const;
+    void writeAsModule(antlr4::Parser &parser, std::ostream &out, const t_instantiation_context& ictx, t_vio_ff_usage &_ff_usage, bool do_lint) const;
     /// \brief outputs a report on the VIOs in the algorithm
     void outputVIOReport(const t_instantiation_context &ictx) const;
+
+    /// \brief special function to rewrite the internal AST of an algorithm if there are `__debug` statements in it
+    void rewriteASTIfDebug(antlr4::Parser &parser);  // NOTE: we require a `antlr4::Parser` instance to create new `antlr4::tree::ParseTree`s dynamically
 
   public:
 
@@ -1188,7 +1203,7 @@ private:
     void enableReporting(std::string reportname);
 
     /// \brief writes a topmost algorithm as a Verilog module, recurses through instanced algorithms
-    void writeAsModule(std::string instance_name,std::ostream& out);
+    void writeAsModule(antlr4::Parser &parser, std::string instance_name,std::ostream& out);
 
     /// \brief outputs the FSM graph in a file (graphviz dot format)
     void outputFSMGraph(std::string dotFile) const;
@@ -1207,7 +1222,6 @@ private:
 
     // check whether an algorithm is used for formal verification or not
     bool isFormal() { return m_hasHash; }
-
   };
 
   // -------------------------------------------------
